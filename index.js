@@ -6,13 +6,62 @@ import express from "express";
 import { promises as fs } from "fs";
 import OpenAI from "openai";
 dotenv.config();
+import {
+  GoogleGenerativeAI,
+  HarmCategory,
+  HarmBlockThreshold,
+} from "@google/generative-ai";
+const MODEL_NAME = "gemini-1.0-pro";
+const API_KEY = "AIzaSyBVSEsr1GY2snDsoIpGeyh2ILZXOH7MyXg";
+
+async function runChat(prompt) {
+  const genAI = new GoogleGenerativeAI(API_KEY);
+  const model = await genAI.getGenerativeModel({ model: MODEL_NAME });
+
+  const generationConfig = {
+    temperature: 0.9,
+    topK: 1,
+    topP: 1,
+    maxOutputTokens: 2048,
+  };
+
+  const safetySettings = [
+    {
+      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+  ];
+
+  const chat = model.startChat({
+    generationConfig,
+    safetySettings,
+    history: [],
+  });
+
+  const result = await chat.sendMessage(prompt);
+  const response = result.response;
+  console.log(response.text());
+  return response.text();
+}
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "-", // Your OpenAI API key here, I used "-" to avoid errors when the key is not set but you should not do that
 });
 
 const elevenLabsApiKey = process.env.ELEVEN_LABS_API_KEY;
-const voiceID = "kgG7dCoKCfLehAPWkJOE";
+const voiceID = "9TrxCHuhgqsoRyi1S5IF";
 
 const app = express();
 app.use(express.json());
@@ -44,8 +93,9 @@ const lipSyncMessage = async (message) => {
     // -y to overwrite the file
   );
   console.log(`Conversion done in ${new Date().getTime() - time}ms`);
+  const rhubarbCommand = `"C:/Program Files/Rhubarb-Lip-Sync-1.13.0-Windows/Rhubarb-Lip-Sync-1.13.0-Windows/rhubarb" -f json -o audios/message_${message}.json audios/message_${message}.wav -r phonetic`;
   await execCommand(
-    `./bin/rhubarb -f json -o audios/message_${message}.json audios/message_${message}.wav -r phonetic`
+    rhubarbCommand
   );
   // -r phonetic is faster but less accurate
   console.log(`Lip sync done in ${new Date().getTime() - time}ms`);
@@ -74,7 +124,8 @@ app.post("/chat", async (req, res) => {
     });
     return;
   }
-  if (!elevenLabsApiKey || openai.apiKey === "-") {
+
+  if (!elevenLabsApiKey) {
     res.send({
       messages: [
         {
@@ -96,36 +147,48 @@ app.post("/chat", async (req, res) => {
     return;
   }
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-3.5-turbo-1106",
-    max_tokens: 1000,
-    temperature: 0.6,
-    response_format: {
-      type: "json_object",
-    },
-    messages: [
-      {
-        role: "system",
-        content: `
-        You are a virtual girlfriend.
-        You will always reply with a JSON array of messages. With a maximum of 3 messages.
-        Each message has a text, facialExpression, and animation property.
-        The different facial expressions are: smile, sad, angry, surprised, funnyFace, and default.
-        The different animations are: Talking_0, Talking_1, Talking_2, Crying, Laughing, Rumba, Idle, Terrified, and Angry. 
-        `,
-      },
-      {
-        role: "user",
-        content: userMessage || "Hello",
-      },
-    ],
-  });
-  let messages = JSON.parse(completion.choices[0].message.content);
-  if (messages.messages) {
-    messages = messages.messages; // ChatGPT is not 100% reliable, sometimes it directly returns an array and sometimes a JSON object with a messages property
-  }
+  // const completion = await openai.chat.completions.create({
+  //   model: "gpt-3.5-turbo-1106",
+  //   max_tokens: 1000,
+  //   temperature: 0.6,
+  //   response_format: {
+  //     type: "json_object",
+  //   },
+  //   messages: [
+  //     {
+  //       role: "system",
+  //       content: `
+  // You are a virtual girlfriend.
+  // You will always reply with a JSON array of messages. With a maximum of 3 messages.
+  // Each message has a text, facialExpression, and animation property.
+  // The different facial expressions are: smile, sad, angry, surprised, funnyFace, and default.
+  // The different animations are: Talking_0, Talking_1, Talking_2, Crying, Laughing, Rumba, Idle, Terrified, and Angry.
+  //       `,
+  //     },
+  //     {
+  //       role: "user",
+  //       content: userMessage || "Hello",
+  //     },
+  //   ],
+  // });
+
+  // let messages = JSON.parse(completion.choices[0].message.content);
+
+  let messages = JSON.parse(
+    await runChat(`You are a virtual girlfriend.
+  // You will always reply with a JSON array of messages. With a maximum of 3 messages.
+  // Each message has a text, facialExpression, and animation property.
+  // The different facial expressions are: smile, sad, angry, surprised, funnyFace, and default.
+  // The different animations are: Talking_0, Talking_1, Talking_2, Crying, Laughing, Rumba, Idle, Terrified, and Angry. 
+  ${userMessage}`)
+  );
+  console.log("thisismessages", messages, messages.length);
+  // if (messages.messages) {
+  //   messages = messages.messages; // ChatGPT is not 100% reliable, sometimes it directly returns an array and sometimes a JSON object with a messages property
+  // }
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
+    console.log("thisistext", message, i);
     // generate audio file
     const fileName = `audios/message_${i}.mp3`; // The name of your audio file
     const textInput = message.text; // The text you wish to convert to speech
